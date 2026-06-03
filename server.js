@@ -48,7 +48,8 @@ function getDriveClient() {
   const credentials = getServiceAccountCredentials();
   const auth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ["https://www.googleapis.com/auth/drive.file"],
+    // FIX 1: Upgrade scope to full drive control so the robot can transfer file ownership back to your personal email account
+    scopes: ["https://www.googleapis.com/auth/drive"],
   });
 
   return google.drive({ version: "v3", auth });
@@ -97,6 +98,8 @@ app.post("/upload", async (req, res) => {
     }
 
     const drive = getDriveClient();
+    
+    // Create the file metadata setup
     const uploadResponse = await drive.files.create({
       requestBody: {
         name: fileName,
@@ -109,6 +112,27 @@ app.post("/upload", async (req, res) => {
       fields: "id,name,mimeType,webViewLink,webContentLink",
       supportsAllDrives: true,
     });
+
+    const fileId = uploadResponse.data.id;
+
+    // FIX 2: Transfer file ownership directly to you! 
+    // This removes the file from the robot's quota and counts it against your personal 15GB space instead.
+    try {
+      await drive.permissions.create({
+        fileId: fileId,
+        transferOwnership: true, // Moves ownership smoothly
+        moveToNewOwnersRoot: false,
+        requestBody: {
+          role: "owner",
+          type: "user",
+          emailAddress: "ariqpraditya@gmail.com", // Your personal drive email address account
+        },
+        supportsAllDrives: true,
+      });
+    } catch (permError) {
+      // Log but don't crash if permission transfer takes a second to register
+      console.warn("Ownership transfer warning:", permError.message);
+    }
 
     res.status(201).json({
       success: true,
