@@ -14,7 +14,6 @@ app.use(
         callback(null, true);
         return;
       }
-
       callback(new Error("Not allowed by CORS"));
     },
     methods: ["POST", "OPTIONS"],
@@ -24,35 +23,19 @@ app.use(
 
 app.use(express.json({ limit: "25mb" }));
 
-function getServiceAccountCredentials() {
-  const rawCredentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-
-  if (!rawCredentials) {
-    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON environment variable.");
-  }
-
-  try {
-    const credentials = JSON.parse(rawCredentials);
-
-    if (!credentials.client_email || !credentials.private_key) {
-      throw new Error("Service account JSON must include client_email and private_key.");
-    }
-
-    return credentials;
-  } catch (error) {
-    throw new Error(`Invalid GOOGLE_SERVICE_ACCOUNT_JSON: ${error.message}`);
-  }
-}
-
+// Authenticates as YOU using your fresh OAuth credentials & permanent Refresh Token
 function getDriveClient() {
-  const credentials = getServiceAccountCredentials();
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    // FIX 1: Upgrade scope to full drive control so the robot can transfer file ownership back to your personal email account
-    scopes: ["https://www.googleapis.com/auth/drive"],
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    "https://developers.google.com/oauthplayground"
+  );
+
+  oauth2Client.setCredentials({
+    refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
   });
 
-  return google.drive({ version: "v3", auth });
+  return google.drive({ version: "v3", auth: oauth2Client });
 }
 
 app.get("/", (_req, res) => {
@@ -99,7 +82,7 @@ app.post("/upload", async (req, res) => {
 
     const drive = getDriveClient();
     
-    // Create the file metadata setup
+    // Clean, direct upload execution under your user authority context
     const uploadResponse = await drive.files.create({
       requestBody: {
         name: fileName,
@@ -110,29 +93,7 @@ app.post("/upload", async (req, res) => {
         body: Readable.from(fileBuffer),
       },
       fields: "id,name,mimeType,webViewLink,webContentLink",
-      supportsAllDrives: true,
     });
-
-    const fileId = uploadResponse.data.id;
-
-    // FIX 2: Transfer file ownership directly to you! 
-    // This removes the file from the robot's quota and counts it against your personal 15GB space instead.
-    try {
-      await drive.permissions.create({
-        fileId: fileId,
-        transferOwnership: true, // Moves ownership smoothly
-        moveToNewOwnersRoot: false,
-        requestBody: {
-          role: "owner",
-          type: "user",
-          emailAddress: "ariqpraditya@gmail.com", // Your personal drive email address account
-        },
-        supportsAllDrives: true,
-      });
-    } catch (permError) {
-      // Log but don't crash if permission transfer takes a second to register
-      console.warn("Ownership transfer warning:", permError.message);
-    }
 
     res.status(201).json({
       success: true,
@@ -149,7 +110,6 @@ app.use((error, _req, res, _next) => {
     res.status(403).json({ error: "CORS origin not allowed." });
     return;
   }
-
   console.error("Server error:", error);
   res.status(500).json({ error: "Server error." });
 });
